@@ -1,11 +1,11 @@
-use crate::agent::AgentConfig;
-use crate::{Agent, AgentError, Identity, NonceFactory, PasswordManager};
+use crate::agent::{AgentConfig, HttpAgent};
+use crate::{AgentError, Identity, NonceFactory, PasswordManager};
 
-pub struct AgentBuilder {
+pub struct HttpAgentBuilder {
     config: AgentConfig,
 }
 
-impl Default for AgentBuilder {
+impl Default for HttpAgentBuilder {
     fn default() -> Self {
         Self {
             config: Default::default(),
@@ -13,15 +13,15 @@ impl Default for AgentBuilder {
     }
 }
 
-impl AgentBuilder {
+impl HttpAgentBuilder {
     /// Create an instance of [Agent] with the information from this builder.
-    pub fn build(self) -> Result<Agent, AgentError> {
-        Agent::new(self.config)
+    pub fn build(self) -> Result<HttpAgent, AgentError> {
+        HttpAgent::new(self.config)
     }
 
     /// Set the URL of the [Agent].
     pub fn with_url<S: ToString>(self, url: S) -> Self {
-        AgentBuilder {
+        HttpAgentBuilder {
             config: AgentConfig {
                 url: url.to_string(),
                 ..self.config
@@ -31,7 +31,7 @@ impl AgentBuilder {
 
     /// Add a NonceFactory to this Agent. By default, no nonce is produced.
     pub fn with_nonce_factory(self, nonce_factory: NonceFactory) -> Self {
-        AgentBuilder {
+        HttpAgentBuilder {
             config: AgentConfig {
                 nonce_factory,
                 ..self.config
@@ -44,7 +44,7 @@ impl AgentBuilder {
     where
         I: 'static + Identity + Send + Sync,
     {
-        AgentBuilder {
+        HttpAgentBuilder {
             config: AgentConfig {
                 identity: Box::new(identity),
                 ..self.config
@@ -55,7 +55,7 @@ impl AgentBuilder {
     /// Same as [with_identity], but provides a boxed implementation instead
     /// of a direct type.
     pub fn with_boxed_identity(self, identity: Box<impl 'static + Identity + Send + Sync>) -> Self {
-        AgentBuilder {
+        HttpAgentBuilder {
             config: AgentConfig {
                 identity,
                 ..self.config
@@ -70,7 +70,7 @@ impl AgentBuilder {
     where
         P: 'static + PasswordManager + Send + Sync,
     {
-        AgentBuilder {
+        HttpAgentBuilder {
             config: AgentConfig {
                 password_manager: Some(Box::new(password_manager)),
                 ..self.config
@@ -84,7 +84,7 @@ impl AgentBuilder {
         self,
         password_manager: Box<impl 'static + PasswordManager + Send + Sync>,
     ) -> Self {
-        AgentBuilder {
+        HttpAgentBuilder {
             config: AgentConfig {
                 password_manager: Some(password_manager),
                 ..self.config
@@ -96,7 +96,7 @@ impl AgentBuilder {
     /// at the time an update or query is made. The default expiry cannot be a
     /// fixed system time.
     pub fn with_ingress_expiry(self, duration: Option<std::time::Duration>) -> Self {
-        AgentBuilder {
+        HttpAgentBuilder {
             config: AgentConfig {
                 ingress_expiry_duration: duration,
                 ..self.config

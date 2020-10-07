@@ -1,5 +1,3 @@
-use ic_agent::agent::{QueryBuilder, UpdateBuilder};
-
 /// An expiry value. Either not specified (the default), a delay relative to the time the
 /// call is made, or a specific date time.
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
@@ -26,30 +24,6 @@ impl Expiry {
     #[inline]
     pub fn at(dt: std::time::SystemTime) -> Self {
         Self::DateTime(dt)
-    }
-
-    pub(crate) fn apply_to_update(self, u: &mut UpdateBuilder<'_>) {
-        match self {
-            Expiry::Unspecified => {}
-            Expiry::Delay(d) => {
-                u.expire_after(d);
-            }
-            Expiry::DateTime(dt) => {
-                u.expire_at(dt);
-            }
-        }
-    }
-
-    pub(crate) fn apply_to_query(self, u: &mut QueryBuilder<'_>) {
-        match self {
-            Expiry::Unspecified => {}
-            Expiry::Delay(d) => {
-                u.expire_after(d);
-            }
-            Expiry::DateTime(dt) => {
-                u.expire_at(dt);
-            }
-        }
     }
 }
 
