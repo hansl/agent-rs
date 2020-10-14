@@ -1,5 +1,6 @@
 use sha2::{Digest, Sha224};
 use std::convert::TryFrom;
+use std::ops::Deref;
 use thiserror::Error;
 
 /// An error happened while encoding, decoding or serializing a principal.
@@ -296,6 +297,18 @@ impl AsRef<[u8]> for PrincipalInner {
             PrincipalInner::DerivedId(v) => v,
             PrincipalInner::Anonymous => ID_ANONYMOUS_BYTES,
         }
+    }
+}
+
+impl Into<Principal> for &Principal {
+    fn into(self) -> Principal {
+        self.clone()
+    }
+}
+
+impl Into<Principal> for Box<Principal> {
+    fn into(self) -> Principal {
+        self.deref().into()
     }
 }
 

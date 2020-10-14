@@ -1,12 +1,10 @@
 use crate::agent::replica_api::{AsyncContent, Envelope, SyncContent};
 use crate::agent::status::Status;
-use crate::agent::{
-    builder, replica_api, AgentConfig, Expiry, QueryBuilder, Replied, RequestStatusResponse,
-    UpdateBuilder,
-};
+use crate::agent::{builder, replica_api, AgentConfig, Expiry, Replied, RequestStatusResponse};
 use crate::export::Principal;
 use crate::{to_request_id, Agent, AgentError, Identity, NonceFactory, PasswordManager, RequestId};
 use async_trait::async_trait;
+use delay::Waiter;
 use reqwest::Method;
 use serde::Serialize;
 use std::convert::TryFrom;
@@ -329,14 +327,14 @@ impl HttpAgent {
         })
     }
 
-    /// Returns an UpdateBuilder enabling the construction of an update call without
+    /// Returns an HttpUpdateBuilder enabling the construction of an update call without
     /// passing all arguments.
     pub fn update<S: ToString>(
         &self,
         canister_id: &Principal,
         method_name: S,
-    ) -> UpdateBuilder<Self> {
-        UpdateBuilder::new(self, canister_id.clone(), method_name.to_string())
+    ) -> HttpUpdateBuilder {
+        HttpUpdateBuilder::new(self, canister_id.clone(), method_name.to_string())
     }
 
     /// Calls and returns the information returned by the status endpoint of a replica.
@@ -349,20 +347,16 @@ impl HttpAgent {
         Status::try_from(&cbor).map_err(|_| AgentError::InvalidReplicaStatus)
     }
 
-    /// Returns a QueryBuilder enabling the construction of a query call without
+    /// Returns a HttpQueryBuilder enabling the construction of a query call without
     /// passing all arguments.
-    pub fn query<S: ToString>(
-        &self,
-        canister_id: &Principal,
-        method_name: S,
-    ) -> QueryBuilder<Self> {
-        QueryBuilder::new(self, canister_id.clone(), method_name.to_string())
+    pub fn query<S: ToString>(&self, canister_id: &Principal, method_name: S) -> HttpQueryBuilder {
+        HttpQueryBuilder::new(self, canister_id.clone(), method_name.to_string())
     }
 }
 
 #[async_trait]
-impl Agent for HttpAgent {
-    async fn execute_query(&self, query: QueryBuilder<'_, Self>) -> Result<Vec<u8>, AgentError> {
+impl Agent<HttpQueryBuilder<'_>, HttpUpdateBuilder<'_>> for HttpAgent {
+    async fn execute_query(&self, query: HttpQueryBuilder<'_>) -> Result<Vec<u8>, AgentError> {
         self.query_raw(
             query.canister_id,
             query.method_name,
@@ -372,10 +366,7 @@ impl Agent for HttpAgent {
         .await
     }
 
-    async fn execute_update(
-        &self,
-        update: UpdateBuilder<'_, Self>,
-    ) -> Result<RequestId, AgentError> {
+    async fn execute_update(&self, update: HttpUpdateBuilder<'_>) -> Result<RequestId, AgentError> {
         self.update_raw(
             update.canister_id,
             update.method_name,
@@ -383,5 +374,155 @@ impl Agent for HttpAgent {
             update.expiry,
         )
         .await
+    }
+}
+
+/// A Query Request Builder.
+///
+/// This makes it easier to do query calls without actually passing all arguments.
+pub struct HttpQueryBuilder<'agent> {
+    agent: &'agent HttpAgent,
+    pub canister_id: Principal,
+    pub method_name: String,
+    pub arg: Vec<u8>,
+    pub expiry: Expiry,
+}
+
+impl<'agent> HttpQueryBuilder<'agent> {
+    pub fn new(agent: &'agent HttpAgent, canister_id: Principal, method_name: String) -> Self {
+        Self {
+            agent,
+            canister_id,
+            method_name,
+            arg: vec![],
+            expiry: Expiry::Unspecified,
+        }
+    }
+
+    pub fn with_arg<Arg: AsRef<[u8]>>(&mut self, arg: Arg) -> &mut Self {
+        self.arg = arg.as_ref().to_vec();
+        self
+    }
+
+    /// Takes a SystemTime converts it to a Duration by calling
+    /// duration_since(UNIX_EPOCH) to learn about where in time this SystemTime lies.
+    /// The Duration is converted to nanoseconds and stored in ingress_expiry_datetime
+    pub fn expire_at(&mut self, time: std::time::SystemTime) -> &mut Self {
+        self.expiry = Expiry::DateTime(time);
+        self
+    }
+
+    /// Takes a Duration (i.e. 30 sec/5 min 30 sec/1 h 30 min, etc.) and adds it to the
+    /// Duration of the current SystemTime since the UNIX_EPOCH
+    /// Subtracts a permitted drift from the sum to account for using system time and not block time.
+    /// Converts the difference to nanoseconds and stores in ingress_expiry_datetime
+    pub fn expire_after(&mut self, duration: std::time::Duration) -> &mut Self {
+        self.expiry = Expiry::Delay(duration);
+        self
+    }
+
+    /// Make a query call. This will return a byte vector.
+    pub async fn call(self) -> Result<Vec<u8>, AgentError> {
+        self.agent.execute_query(self).await
+    }
+}
+
+/// An Update Request Builder.
+///
+/// This makes it easier to do update calls without actually passing all arguments or specifying
+/// if you want to wait or not.
+pub struct HttpUpdateBuilder<'agent> {
+    agent: &'agent HttpAgent,
+    canister_id: Principal,
+    method_name: String,
+    arg: Vec<u8>,
+    expiry: Expiry,
+}
+
+impl<'agent> HttpUpdateBuilder<'agent> {
+    pub fn new(agent: &'agent HttpAgent, canister_id: Principal, method_name: String) -> Self {
+        Self {
+            agent,
+            canister_id,
+            method_name,
+            arg: vec![],
+            expiry: Expiry::Unspecified,
+        }
+    }
+
+    pub fn with_arg<Arg: AsRef<[u8]>>(&mut self, arg: Arg) -> &mut Self {
+        self.arg = arg.as_ref().to_vec();
+        self
+    }
+
+    /// Takes a SystemTime converts it to a Duration by calling
+    /// duration_since(UNIX_EPOCH) to learn about where in time this SystemTime lies.
+    /// The Duration is converted to nanoseconds and stored in ingress_expiry_datetime
+    pub fn expire_at(&mut self, time: std::time::SystemTime) -> &mut Self {
+        self.expiry = Expiry::DateTime(time);
+        self
+    }
+
+    /// Takes a Duration (i.e. 30 sec/5 min 30 sec/1 h 30 min, etc.) and adds it to the
+    /// Duration of the current SystemTime since the UNIX_EPOCH
+    /// Subtracts a permitted drift from the sum to account for using system time and not block time.
+    /// Converts the difference to nanoseconds and stores in ingress_expiry_datetime
+    pub fn expire_after(&mut self, duration: std::time::Duration) -> &mut Self {
+        self.expiry = Expiry::Delay(duration);
+        self
+    }
+
+    /// Make an update call. This will call request_status on the RequestId in a loop and return
+    /// the response as a byte vector.
+    pub async fn call_and_wait<W: Waiter>(&self, mut waiter: W) -> Result<Vec<u8>, AgentError> {
+        let request_id = self
+            .agent
+            .update_raw(
+                &self.canister_id,
+                self.method_name.as_str(),
+                self.arg.as_slice(),
+                self.ingress_expiry_datetime,
+            )
+            .await?;
+        waiter.start();
+
+        loop {
+            match self
+                .agent
+                .request_status_raw(&request_id, self.ingress_expiry_datetime)
+                .await?
+            {
+                RequestStatusResponse::Replied {
+                    reply: Replied::CallReplied(arg),
+                } => return Ok(arg),
+                RequestStatusResponse::Rejected {
+                    reject_code,
+                    reject_message,
+                } => {
+                    return Err(AgentError::ReplicaError {
+                        reject_code,
+                        reject_message,
+                    })
+                }
+                RequestStatusResponse::Unknown => (),
+                RequestStatusResponse::Received => (),
+                RequestStatusResponse::Processing => (),
+                RequestStatusResponse::Done => {
+                    return Err(AgentError::RequestStatusDoneNoReply(String::from(
+                        request_id,
+                    )))
+                }
+            };
+
+            waiter
+                .wait()
+                .map_err(|_| AgentError::TimeoutWaitingForResponse())?;
+        }
+    }
+
+    /// Make an update call. This will return a RequestId.
+    /// The RequestId should then be used for request_status (most likely in a loop).
+    pub async fn call(self) -> Result<RequestId, AgentError> {
+        self.agent.execute_update(self)
     }
 }
